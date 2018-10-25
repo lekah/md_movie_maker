@@ -86,7 +86,8 @@ CAMERA
 
 
 def make_scene(args, header, cell, cellI, repeat, species, history_params, current_params,
-        trajectory_format, trajectory_fname, convert_to_jpg=False, clean_files=True):
+        trajectory_format, trajectory_fname, convert_to_jpg=False, clean_files=True,
+        n_lines_header=2):
     current_step, scene_fname, tga_fname, log_fname = args
     if len(history_params):
         stepsizes_all_history = [d['stepsize'] for d in history_params.values()]
@@ -95,7 +96,7 @@ def make_scene(args, header, cell, cellI, repeat, species, history_params, curre
         read_from_step = current_step
     
     nat = len(species)
-    nlines_per_frame = nat+2
+    nlines_per_frame = nat + n_lines_header
     positions = np.empty((nat, 3))
     shifted_positions = np.empty((nat, 3))
     with  open(scene_fname, 'w') as fscene:
@@ -107,8 +108,7 @@ def make_scene(args, header, cell, cellI, repeat, species, history_params, curre
                 if not(istep == current_step or any([istep % stepsize == 0 for stepsize in stepsizes_all_history])):
                     [fpos.readline() for l in range(nlines_per_frame)]
                     continue
-                # skipping 2 lines:
-                [fpos.readline() for _ in range(2)]
+                [fpos.readline() for _ in range(n_lines_header)]
                 # So, reading all positions:
                 for iat in range(nat):
                     line = fpos.readline().split()
@@ -175,7 +175,14 @@ def print_s(*args, **kwargs):
     print args
     print kwargs.keys()
 
-def make_movie(params, trajectory_fname, n_pools=1, convert_to_jpg=False, clean_files=False):
+def make_movie(params, trajectory_fname, prefix='scene', n_pools=1, convert_to_jpg=False, clean_files=False, **kwargs):
+    def load_var_n_pop(key, default, dict_):
+        if key in dict_:
+            if dict_[key] is None:
+                dict_.pop(key)
+                return default
+            else:
+                return dict_.pop(key)
     
     header = _make_header(params['scene'])
 
@@ -188,13 +195,22 @@ def make_movie(params, trajectory_fname, n_pools=1, convert_to_jpg=False, clean_
     else:
         raise ValueError("range has to be a list of lenght 2 or 3")
 
+    min_ = load_var_n_pop('min', min_, kwargs)
+    max_ = load_var_n_pop('max', max_, kwargs)
+    step_ = load_var_n_pop('step', step_, kwargs)
+    if kwargs:
+        raise Exception("unrecognized arguments:{}".format(', '.join(map(str, kwargs.keys()))))
+
     specifier_maxlen = len(str(max_))
     species = np.array(params['trajectory']['species'], dtype=str)
 
+
     repeat = params['trajectory']['repeat']
     trajectory_format = params['trajectory']['trajectory_format']
+    n_lines_header = params['trajectory'].get('n_lines_header',2)
     history = params.get('history',{})
     current = params.get('current',{})
+
 
     cell = np.array(params['trajectory']['cell']).T
     cellI = np.array(np.matrix(cell).I)
@@ -202,11 +218,11 @@ def make_movie(params, trajectory_fname, n_pools=1, convert_to_jpg=False, clean_
     func = partial(make_scene, header=header, cell=cell, cellI=cellI, 
         repeat=repeat, species=species, history_params=history, current_params=current, 
         trajectory_format=trajectory_format, trajectory_fname=trajectory_fname, convert_to_jpg=convert_to_jpg,
-        clean_files=clean_files)
+        clean_files=clean_files, n_lines_header=n_lines_header)
 
     data = list()
     for istep in range(min_, max_, step_):
-        basename = 'scene_{}{}'.format('0'*(specifier_maxlen-len(str(istep))), istep)
+        basename = '{}_{}{}'.format(prefix, '0'*(specifier_maxlen-len(str(istep))), istep)
         scene_fname = '{}.dat'.format(basename)
         tga_fname = '{}.tga'.format(basename)
         log_fname = '{}.log'.format(basename)
@@ -214,16 +230,22 @@ def make_movie(params, trajectory_fname, n_pools=1, convert_to_jpg=False, clean_
     pool = Pool(n_pools)
     pool.map(func, data)
     pool.close()
-    #~ pool.join()
-        #~ make_scene(trajectory_fname, scene_fname, tga_fname, log_fname, 
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument('tachyon_params', help='The json file with the parameters')
-    parser.add_argument('trajectory', help='The trajectory filename (for now has to be XYZ)')
+    parser.add_argument('trajectory_fname', help='The trajectory filename (for now has to be XYZ)')
+    parser.add_argument('-p', '--prefix', default='scene')
     parser.add_argument('-n', '--n-pools', type=int, help='The number of pools to use')
-    parsed_args = parser.parse_args()
-    with open(parsed_args.tachyon_params) as f:
+    parser.add_argument('--min', type=int, help='Trajectory index to start')
+    parser.add_argument('--max', type=int, help='Trajectory index to end')
+    parser.add_argument('--step', type=int, help='Trajectory stepsize')
+    parser.add_argument('--clean', dest='clean_files', action='store_true', help='Clean log and intermediate files')
+    parser.add_argument('--jpg', dest='convert_to_jpg', action='store_true', help='Convert to jpg')
+    
+    parsed_args = vars(parser.parse_args())
+
+    with open(parsed_args.pop('tachyon_params')) as f:
         tachyon_params = json.load(f)
-    make_movie(tachyon_params, parsed_args.trajectory, parsed.n_pools)
+    make_movie(tachyon_params, **parsed_args)
